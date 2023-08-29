@@ -7,7 +7,10 @@ edition = "2021"
 
 [dependencies]
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs" }
-rand = {version = "0.8.5", default-features = false, features = ["std", "std_rng"]}
+citro3d = { git = "https://github.com/thecatcore/citro3d-rs", branch = "citro2d-requirements" }
+citro2d = { git = "https://github.com/thecatcore/citro2d-rs" }
+citro2d-sys = { git = "https://github.com/thecatcore/citro2d-rs" }
+picorand = "0.1.2"
 
 [package.metadata.cargo-3ds]
 romfs_dir = "romfs"
