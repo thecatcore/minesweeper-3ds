@@ -9,6 +9,8 @@ use ctru::prelude::*;
 use ctru::services::cfgu::Cfgu;
 use ctru::services::gfx::{RawFrameBuffer, Screen};
 use picorand::{PicoRandGenerate, RNG, WyRand};
+use crate::State::Revealed;
+use crate::TileType::Blank;
 
 const DEFAULT_CONFIGS: [BoardConfig; 3] = [
     BoardConfig {
@@ -44,6 +46,29 @@ enum TileType {
     Mine
 }
 
+impl TileType {
+    fn get_color(&self) -> u32 {
+        unsafe {
+            match self {
+                Blank(num) => {
+                    match num {
+                        1 => C2D_Color32f(0.0f32, 0.0f32, 255.0f32, 1.0f32),
+                        2 => C2D_Color32f(0.0f32, 255.0f32, 0.0f32, 1.0f32),
+                        3 => C2D_Color32f(255.0f32, 0.0f32, 0.0f32, 1.0f32),
+                        4 => C2D_Color32f(180.0f32, 0.0f32, 255.0f32, 1.0f32),
+                        5 => C2D_Color32f(154.0f32, 135.0f32, 111.0f32, 1.0f32),
+                        6 => C2D_Color32f(0.0f32, 255.0f32, 235.0f32, 1.0f32),
+                        7 => C2D_Color32f(0.0f32, 0.0f32, 0.0f32, 1.0f32),
+                        8 => C2D_Color32f(135.0f32, 135.0f32, 135.0f32, 1.0f32),
+                        _ => C2D_Color32f(255.0f32, 255.0f32, 255.0f32, 1.0f32)
+                    }
+                }
+                TileType::Mine => C2D_Color32f(0.0f32, 0.0f32, 0.0f32, 1.0f32)
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Tile {
     tile_type: TileType,
@@ -53,7 +78,7 @@ struct Tile {
 impl Tile {
     pub fn blank() -> Tile {
         Tile {
-            tile_type: TileType::Blank(0),
+            tile_type: Blank(0),
             state: State::Covered
         }
     }
@@ -61,9 +86,9 @@ impl Tile {
     pub fn mark_neighbor(&mut self, inc: bool) {
         if let TileType::Blank(num) = self.tile_type {
             if inc {
-                self.tile_type = TileType::Blank(num + 1);
+                self.tile_type = Blank(num + 1);
             } else if num > 0 {
-                self.tile_type = TileType::Blank(num - 1);
+                self.tile_type = Blank(num - 1);
             }
         }
     }
@@ -103,6 +128,7 @@ impl Board {
     pub fn new(config: BoardConfig) -> Self {
         let width = config.width.clone();
         let height = config.height.clone();
+
         Board {
             config,
             board: vec![
@@ -130,27 +156,7 @@ impl Board {
 
             if self.is_tile_in_board(rand_x, rand_y) && !self.is_mine(rand_x, rand_y) {
                 if let Ok(_) = self.set_tile(rand_x, rand_y, TileType::Mine) {
-                    let mut neighbors = vec![
-                        (rand_x + 1, rand_y),
-                        (rand_x, rand_y + 1),
-                        (rand_x + 1, rand_y + 1)
-                    ];
-
-                    if rand_x != 0 && rand_y != 0 {
-                        neighbors.push((rand_x - 1, rand_y - 1));
-                    }
-
-                    if rand_x != 0 && rand_y == 0 {
-                        neighbors.push((rand_x - 1, rand_y));
-                        neighbors.push((rand_x - 1, rand_y + 1));
-                    }
-
-                    if rand_y != 0 && rand_x == 0 {
-                        neighbors.push((rand_x, rand_y - 1));
-                        neighbors.push((rand_x + 1, rand_y - 1));
-                    }
-
-                    for neighbor in neighbors {
+                    for neighbor in self.get_neighbors(rand_x, rand_y) {
                         if let Some(tile) = self.get_tile_mut(neighbor.0, neighbor.1) {
                             tile.mark_neighbor(true);
                         }
@@ -160,6 +166,68 @@ impl Board {
                 }
             }
         }
+    }
+
+    pub fn reveal_tile(&mut self, x: usize, y: usize) {
+        if let Some(tile) = self.get_tile_mut(x, y) {
+            // if let TileType::Mine = tile.tile_type {
+            //     panic!("MINE!")
+            // }
+
+            // if !self.is_mine(x, y) {
+                tile.state = Revealed;
+
+                for neighbor in self.get_neighbors(x, y) {
+                    if let Some(tile2) = self.get_tile_mut(neighbor.0, neighbor.1) {
+                        if let Blank(num) = tile2.tile_type {
+                            match tile2.state {
+                                State::Covered => if num == 0 {
+                                    self.reveal_tile(neighbor.0, neighbor.1)
+                                } else {
+                                    tile2.state = Revealed;
+                                },
+                                _ => {}
+                            }
+                        }
+                    }
+
+                }
+            // }
+        }
+    }
+
+    pub fn revealed(&self, x: usize, y: usize) -> bool {
+        if let Some(tile) = self.get_tile(x, y) {
+            if let Revealed = tile.state {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn get_neighbors(&self, x: usize, y: usize) -> Vec<(usize, usize)> {
+        let mut neighbors = vec![
+            (x + 1, y),
+            (x, y + 1),
+            (x + 1, y + 1)
+        ];
+
+        if x != 0 && y != 0 {
+            neighbors.push((x - 1, y - 1));
+        }
+
+        if x != 0 {
+            neighbors.push((x - 1, y));
+            neighbors.push((x - 1, y + 1));
+        }
+
+        if y != 0 {
+            neighbors.push((x, y - 1));
+            neighbors.push((x + 1, y - 1));
+        }
+
+        neighbors
     }
 
     pub fn is_mine(&self, x: usize, y: usize) -> bool {
@@ -247,6 +315,8 @@ fn main() {
 
     let mut rand_instance = RNG::<WyRand, u32>::new(cur_time);
 
+    let mut selected = (0usize, 0usize);
+
     // let texts = [
     //     (format!("Size: {} by {}", board.config.height, board.config.width), 1, 1),
     //     (format!("Mines lefts: {}/{}", mines_left, board.config.mines), 1, 1)
@@ -277,8 +347,30 @@ fn main() {
 
         hid.scan_input();
 
-        if hid.keys_down().contains(KeyPad::START) {
+        let keys_down = hid.keys_down();
+
+        if keys_down.contains(KeyPad::START) {
             break;
+        }
+
+        if keys_down.contains(KeyPad::DPAD_DOWN) || keys_down.contains(KeyPad::CPAD_DOWN) {
+            if selected.0 > 0 {
+                selected.0 -= 1;
+            }
+        } else if keys_down.contains(KeyPad::DPAD_UP) || keys_down.contains(KeyPad::CPAD_UP) {
+            if selected.0 < (board.config.width - 1) as usize {
+                selected.0 += 1;
+            }
+        } else if keys_down.contains(KeyPad::DPAD_LEFT) || keys_down.contains(KeyPad::CPAD_LEFT) {
+            if selected.1 > 0 {
+                selected.1 -= 1;
+            }
+        } else if keys_down.contains(KeyPad::DPAD_RIGHT) || keys_down.contains(KeyPad::CPAD_RIGHT) {
+            if selected.1 < (board.config.height - 1) as usize {
+                selected.1 += 1;
+            }
+        } else if keys_down.contains(KeyPad::A) {
+            board.reveal_tile(selected.0, selected.1);
         }
 
         c3d_instance.render_frame_with(|instance| {
@@ -301,28 +393,74 @@ fn main() {
                             let max_y = y + cell_height_total - pad;
                             let y_height = max_y - min_y;
 
-                            let mut color: u32 = unsafe {
-                                C2D_Color32f(255.0f32, 255.0f32, 255.0f32, 1.0f32)
-                            };
-
-                            if board.is_mine(i, j) {
-                                color = unsafe {
-                                    C2D_Color32f(255.0f32, 0.0f32, 0.0f32, 1.0f32)
+                            if selected.0 == i && selected.1 == j {
+                                let color = unsafe {
+                                    C2D_Color32f(0.0f32, 0.0f32, 255.0f32, 1.0f32)
                                 };
+
+                                unsafe {
+                                    C2D_DrawRectangle(
+                                        (min_x - pad) as f32,
+                                        (min_y - pad) as f32,
+                                        0f32,
+                                        (x_width + (2*pad)) as f32,
+                                        (y_height + (2*pad)) as f32,
+                                        color,
+                                        color,
+                                        color,
+                                        color
+                                    );
+                                }
                             }
 
-                            unsafe {
-                                C2D_DrawRectangle(
-                                    min_x as f32,
-                                    min_y as f32,
-                                    0f32,
-                                    x_width as f32,
-                                    y_height as f32,
-                                    color,
-                                    color,
-                                    color,
-                                    color
-                                );
+                            if let Some(tile) = board.get_tile(i, j) {
+                                let mut color: u32 = unsafe {
+                                    C2D_Color32f(0.0f32, 100.0f32, 100.0f32, 1.0f32)
+                                };
+
+                                if let Revealed = tile.state {
+                                    color = unsafe {
+                                        C2D_Color32f(255.0f32, 255.0f32, 255.0f32, 1.0f32)
+                                    };
+
+                                    if board.is_mine(i, j) {
+                                        color = unsafe {
+                                            C2D_Color32f(255.0f32, 0.0f32, 0.0f32, 1.0f32)
+                                        };
+                                    }
+                                }
+
+                                unsafe {
+                                    C2D_DrawRectangle(
+                                        min_x as f32,
+                                        min_y as f32,
+                                        0f32,
+                                        x_width as f32,
+                                        y_height as f32,
+                                        color,
+                                        color,
+                                        color,
+                                        color
+                                    );
+                                }
+
+                                if board.revealed(i, j) {
+                                    let tile_color = tile.tile_type.get_color();
+
+                                    unsafe {
+                                        C2D_DrawRectangle(
+                                            (min_x + pad) as f32,
+                                            (min_y + pad) as f32,
+                                            0f32,
+                                            (x_width - (2*pad)) as f32,
+                                            (y_height - (2*pad)) as f32,
+                                            tile_color,
+                                            tile_color,
+                                            tile_color,
+                                            tile_color
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
