@@ -9,7 +9,7 @@ use ctru::prelude::*;
 use ctru::services::cfgu::Cfgu;
 use ctru::services::gfx::{RawFrameBuffer, Screen};
 use picorand::{PicoRandGenerate, RNG, WyRand};
-use crate::State::Revealed;
+use crate::State::{Covered, Revealed};
 use crate::TileType::Blank;
 
 const DEFAULT_CONFIGS: [BoardConfig; 3] = [
@@ -168,37 +168,92 @@ impl Board {
         }
     }
 
-    pub fn reveal_tile(&mut self, x: usize, y: usize) {
+    pub fn reveal_tile(&mut self, x: usize, y: usize, try_neighbors: bool) -> bool {
         if let Some(tile) = self.get_tile_mut(x, y) {
-            // if let TileType::Mine = tile.tile_type {
-            //     panic!("MINE!")
-            // }
+            if let Covered = tile.state {
+                if let TileType::Mine = tile.tile_type {
+                    return true;
+                }
 
-            // if !self.is_mine(x, y) {
                 tile.state = Revealed;
 
-                for neighbor in self.get_neighbors(x, y) {
-                    if let Some(tile2) = self.get_tile_mut(neighbor.0, neighbor.1) {
-                        if let Blank(num) = tile2.tile_type {
-                            match tile2.state {
-                                State::Covered => if num == 0 {
-                                    self.reveal_tile(neighbor.0, neighbor.1)
-                                } else {
-                                    tile2.state = Revealed;
-                                },
-                                _ => {}
+                if let Blank(num) = tile.tile_type {
+                    if num == 0 {
+                        let mut bol = false;
+
+                        for neighbor in self.get_neighbors(x, y) {
+                            if let Some(tile2) = self.get_tile_mut(neighbor.0, neighbor.1) {
+                                if let Blank(num) = tile2.tile_type {
+                                    if let Covered = tile2.state {
+                                        if num == 0 {
+                                            if self.reveal_tile(neighbor.0, neighbor.1, true) {
+                                                bol = true;
+                                            }
+                                        } else {
+                                            tile2.state = Revealed;
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
 
+                        return bol;
+                    }
                 }
-            // }
+
+                return false;
+            } else if let Revealed = tile.state {
+                let mut bol = false;
+
+                if try_neighbors {
+                    for neighbor in self.get_neighbors(x, y) {
+                        if self.reveal_tile(neighbor.0, neighbor.1, false) {
+                            bol = true;
+                        }
+                    }
+                }
+
+
+                return bol;
+            }
+        }
+
+        return false;
+    }
+
+    pub fn flag_tile(&mut self, x: usize, y: usize) -> (i8, bool) {
+        let mine = self.is_mine(x, y);
+
+        if let Some(tile) = self.get_tile_mut(x, y) {
+            match tile.state {
+                Revealed => (0, mine),
+                State::Flag => {
+                    tile.state = State::Covered;
+                    (-1, mine)
+                }
+                State::Covered => {
+                    tile.state = State::Flag;
+                    (1, mine)
+                }
+            }
+        } else {
+            (0, mine)
         }
     }
 
     pub fn revealed(&self, x: usize, y: usize) -> bool {
         if let Some(tile) = self.get_tile(x, y) {
             if let Revealed = tile.state {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn flagged(&self, x: usize, y: usize) -> bool {
+        if let Some(tile) = self.get_tile(x, y) {
+            if let State::Flag = tile.state {
                 return true;
             }
         }
@@ -311,7 +366,10 @@ fn main() {
     let cell_height_total = 30;
     let pad: usize = 5;
 
-    let mut mines_left = board.config.mines.clone();
+    let mut mines_left = board.config.mines.clone() as i8;
+    let mut real_mines_left = mines_left.clone();
+    let mut lost = false;
+    let mut win = false;
 
     let mut rand_instance = RNG::<WyRand, u32>::new(cur_time);
 
@@ -369,8 +427,21 @@ fn main() {
             if selected.1 < (board.config.height - 1) as usize {
                 selected.1 += 1;
             }
-        } else if keys_down.contains(KeyPad::A) {
-            board.reveal_tile(selected.0, selected.1);
+        } else if !lost && !win {
+            if keys_down.contains(KeyPad::A) {
+                lost = !board.reveal_tile(selected.0, selected.1, true);
+            } else if keys_down.contains(KeyPad::B) {
+                let ret = board.flag_tile(selected.0, selected.1);
+                mines_left += ret.0;
+
+                if ret.1 {
+                    real_mines_left += ret.0;
+                }
+
+                if real_mines_left == 0 {
+                    win = true;
+                }
+            }
         }
 
         c3d_instance.render_frame_with(|instance| {
@@ -444,9 +515,15 @@ fn main() {
                                     );
                                 }
 
-                                if board.revealed(i, j) {
-                                    let tile_color = tile.tile_type.get_color();
+                                let mut tile_color = tile.tile_type.get_color();
 
+                                if board.flagged(i, j) {
+                                    tile_color = unsafe {
+                                        C2D_Color32f(255.0f32, 0.0f32, 0.0f32, 1.0f32)
+                                    }
+                                }
+
+                                if board.revealed(i, j) || board.flagged(i, j) {
                                     unsafe {
                                         C2D_DrawRectangle(
                                             (min_x + pad) as f32,
